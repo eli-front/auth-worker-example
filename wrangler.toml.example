@@ -7,3 +7,6 @@ compatibility_flags = []
 binding = "DB" # i.e. available in your Worker on env.DB
 database_name = "users"
 database_id = "7e403b35-6c2f-4a11-9a67-68e413785dce"
+
+[vars]
+JWT_SECRET = "supersecret" # run `openssl rand -hex 32` to generate a random secret

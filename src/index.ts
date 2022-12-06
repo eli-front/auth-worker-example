@@ -1,29 +1,8 @@
-/**
- * Welcome to Cloudflare Workers! This is your first worker.
- *
- * - Run `wrangler dev src/index.ts` in your terminal to start a development server
- * - Open a browser tab at http://localhost:8787/ to see your worker in action
- * - Run `wrangler publish src/index.ts --name my-worker` to publish your worker
- *
- * Learn more at https://developers.cloudflare.com/workers/
- */
-
-
-
 import { Hono } from 'hono'
+import { decodeSession, encodeSession } from './jwt';
+import { Env, User } from './types';
 
 const app = new Hono()
-
-export interface Env {
-	DB: D1Database
-}
-
-type user = {
-	userId: string,
-	username: string,
-	password: string,
-	salt: string,
-}
 
 
 const getUser = async (username: string, env: Env) => {
@@ -31,7 +10,7 @@ const getUser = async (username: string, env: Env) => {
 		'SELECT * FROM users WHERE username = ?'
 	).bind(username).all();
 
-	return results?.[0] as user;
+	return results?.[0] as User;
 }
 
 app.post(
@@ -83,7 +62,7 @@ app.post(
 		console.log(hashString);
 
 
-		const user: Omit<user, 'userId'> = {
+		const user: Omit<User, 'userId'> = {
 			username,
 			password: hashString,
 			salt: saltString
@@ -106,6 +85,33 @@ app.post(
 
 	}
 )
+
+app.get('/api/jwt', async c => {
+	const issuer = 'issuer';
+	const audience = 'audience';
+
+	const jwt = await encodeSession(
+		new TextEncoder().encode(c.env.JWT_SECRET),
+		{
+			sessionId: '123',
+			userId: '123'
+		},
+		issuer,
+		audience
+	)
+
+	const decoded = await decodeSession(
+		new TextEncoder().encode('hello'),
+		jwt.token,
+		issuer,
+		audience
+	)
+
+	return new Response(JSON.stringify({
+		jwt,
+		decoded
+	}), { status: 200, headers: { 'Content-Type': 'application/json' } });
+})
 
 
 export default app;

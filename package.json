@@ -10,10 +10,11 @@
   },
   "private": true,
   "scripts": {
-    "start": "wrangler dev",
+    "start": "NO_D1_WARNING=true wrangler dev --local --persist",
     "deploy": "wrangler publish"
   },
   "dependencies": {
-    "hono": "^2.5.8"
+    "hono": "^2.5.8",
+    "jose": "^4.11.1"
   }
 }
