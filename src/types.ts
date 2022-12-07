@@ -26,6 +26,7 @@ export interface EncodeResult {
 
 export interface DecodeResult {
     valid: boolean
+    status: ExpirationStatus
     session?: Session;
 }
 

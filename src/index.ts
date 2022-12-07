@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
-import { decodeSession, encodeSession } from './jwt';
+import { serialize } from './cookie';
+import { auth, decodeSession, encodeSession, getIssuer } from './jwt';
 import { Env, User } from './types';
 
 const app = new Hono()
@@ -14,36 +15,50 @@ const getUser = async (username: string, env: Env) => {
 }
 
 app.post(
-	'/api/user/login',
+	'/api/login',
 	async c => {
 		const { password, username } = await c.req.json() as { password: string, username: string }
 
 		const user = await getUser(username, c.env as Env);
 		if (!user) {
-			return new Response('User not found', { status: 400 });
+			return new Response('Not Authorized', { status: 400 });
 		}
-
-		console.log(user.salt)
-
 
 		// hash password with salt 
 		const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(password + user.salt));
 
-
-		console.log(new TextDecoder().decode(hash));
-
 		// // compare hash with password
 		if (new TextDecoder().decode(hash) !== user.password) {
-			return new Response('Incorrect password', { status: 400 });
+			return new Response('Not Authorized', { status: 400 });
 		}
 
+		const jwt = await encodeSession(
+			new TextEncoder().encode(c.env.JWT_SECRET),
+			{
+				sessionId: crypto.randomUUID(),
+				userId: user.userId
+			},
+			getIssuer(c),
+		)
 
-		return new Response(JSON.stringify(user), { status: 200, headers: { 'Content-Type': 'application/json' } });
+		const cookie = serialize('jwt', jwt.token, {
+			httpOnly: true,
+			sameSite: 'strict',
+			secure: c.env.DEVELOPMENT != true,
+			expires: new Date(jwt.expires)
+		})
+
+		return new Response(JSON.stringify(user), {
+			status: 200, headers: {
+				'Content-Type': 'application/json',
+				'Set-Cookie': cookie
+			}
+		});
 	}
 )
 
 app.post(
-	'/api/user/signup',
+	'/api/signup',
 
 	async c => {
 		const { password, username } = await c.req.json() as { password: string, username: string }
@@ -53,16 +68,11 @@ app.post(
 		const salt = crypto.getRandomValues(new Uint8Array(32));
 		const saltString = new TextDecoder().decode(salt);
 
-		console.log(saltString);
-
 		const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(password + saltString));
 
 		const hashString = new TextDecoder().decode(hash);
 
-		console.log(hashString);
-
-
-		const user: Omit<User, 'userId'> = {
+		let userInfo: Omit<User, 'userId'> = {
 			username,
 			password: hashString,
 			salt: saltString
@@ -71,47 +81,64 @@ app.post(
 		try {
 			await c.env.DB.prepare(
 				'INSERT INTO users (username, password, salt) VALUES (?, ?, ?)'
-			).bind(user.username, user.password, user.salt).run();
+			).bind(userInfo.username, userInfo.password, userInfo.salt).run();
 
 		} catch (e) {
 			return new Response('Failed to create new user', { status: 400 });
 		}
 
+		const user = await getUser(username, c.env as Env);
 
-		return new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+		if (!user) {
+			return new Response('Not Authorized', { status: 400 });
+		}
 
+		const jwt = await encodeSession(
+			new TextEncoder().encode(c.env.JWT_SECRET),
+			{
+				sessionId: crypto.randomUUID(),
+				userId: user.userId
+			},
+			getIssuer(c),
+		)
 
+		const cookie = serialize('jwt', jwt.token, {
+			httpOnly: true,
+			sameSite: 'strict',
+			secure: c.env.DEVELOPMENT != true,
+			expires: new Date(jwt.expires)
+		})
 
-
+		return new Response(JSON.stringify({ success: true }), {
+			status: 200, headers: {
+				'Content-Type': 'application/json',
+				'Set-Cookie': cookie
+			}
+		});
 	}
 )
 
-app.get('/api/jwt', async c => {
-	const issuer = 'issuer';
-	const audience = 'audience';
+app.get('/api/session', async c => await auth(c, async (s) => {
 
-	const jwt = await encodeSession(
-		new TextEncoder().encode(c.env.JWT_SECRET),
-		{
-			sessionId: '123',
-			userId: '123'
-		},
-		issuer,
-		audience
-	)
+	const result = await encodeSession(new TextEncoder().encode(c.env.JWT_SECRET), s, getIssuer(c))
 
-	const decoded = await decodeSession(
-		new TextEncoder().encode('hello'),
-		jwt.token,
-		issuer,
-		audience
-	)
+	const cookie = serialize('jwt', result.token, {
+		httpOnly: true,
+		sameSite: 'strict',
+		secure: c.env.DEVELOPMENT != true,
+		expires: new Date(result.expires)
+	})
 
 	return new Response(JSON.stringify({
-		jwt,
-		decoded
-	}), { status: 200, headers: { 'Content-Type': 'application/json' } });
-})
+		session: s,
+	}), {
+		status: 200, headers: {
+			'Content-Type': 'application/json',
+			'Set-Cookie': cookie
+		}
+	});
+}))
+
 
 
 export default app;

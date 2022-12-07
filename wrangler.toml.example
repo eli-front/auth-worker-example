@@ -10,3 +10,9 @@ database_id = "7e403b35-6c2f-4a11-9a67-68e413785dce"
 
 [vars]
 JWT_SECRET = "supersecret" # run `openssl rand -hex 32` to generate a random secret
+DEVELOPMENT = true
+ISSUER = "http://192.168.50.24:8787"
+
+[env.production.vars]
+DEVELOPMENT = false
+ISSUER = "https://auth.example.com"
