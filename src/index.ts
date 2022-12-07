@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { serialize } from './cookie';
-import { auth, encodeSession, getIssuer } from './jwt';
+import { auth, encodeSession, getAudience, getIssuer } from './jwt';
 import { Env, User } from './types';
 import { createUser, getUser } from './user';
 
@@ -30,6 +30,12 @@ app.post(
 			return new Response('Not Authorized', { status: 400 });
 		}
 
+
+		const audience = getAudience(c);
+		if (!audience) {
+			return new Response('Not Authorized', { status: 400 });
+		}
+
 		const jwt = await encodeSession(
 			new TextEncoder().encode(c.env.JWT_SECRET),
 			{
@@ -37,6 +43,7 @@ app.post(
 				userId: user.userId
 			},
 			getIssuer(c),
+			audience
 		)
 
 		const cookie = serialize('jwt', jwt.token, {
@@ -70,8 +77,12 @@ app.post(
 		}
 
 		const user = await getUser(username, c.env as Env);
-
 		if (!user) {
+			return new Response('Not Authorized', { status: 400 });
+		}
+
+		const audience = getAudience(c);
+		if (!audience) {
 			return new Response('Not Authorized', { status: 400 });
 		}
 
@@ -82,6 +93,7 @@ app.post(
 				userId: user.userId
 			},
 			getIssuer(c),
+			audience
 		)
 
 		const cookie = serialize('jwt', jwt.token, {
@@ -102,7 +114,12 @@ app.post(
 
 app.get('/api/session', async c => await auth(c, async (s) => {
 
-	const result = await encodeSession(new TextEncoder().encode(c.env.JWT_SECRET), s, getIssuer(c))
+	const audience = getAudience(c);
+	if (!audience) {
+		return new Response('Not Authorized', { status: 400 });
+	}
+
+	const result = await encodeSession(new TextEncoder().encode(c.env.JWT_SECRET), s, getIssuer(c), audience)
 
 	const cookie = serialize('jwt', result.token, {
 		httpOnly: true,
