@@ -1,26 +1,24 @@
 import { Hono } from 'hono'
 import { serialize } from './cookie';
-import { auth, decodeSession, encodeSession, getIssuer } from './jwt';
+import { auth, encodeSession, getIssuer } from './jwt';
 import { Env, User } from './types';
+import { createUser, getUser } from './user';
 
 const app = new Hono()
-
-
-const getUser = async (username: string, env: Env) => {
-	const { results } = await env.DB.prepare(
-		'SELECT * FROM users WHERE username = ?'
-	).bind(username).all();
-
-	return results?.[0] as User;
-}
 
 app.post(
 	'/api/login',
 	async c => {
 		const { password, username } = await c.req.json() as { password: string, username: string }
 
-		const user = await getUser(username, c.env as Env);
-		if (!user) {
+		let user: User
+
+		try {
+			user = await getUser(username, c.env as Env);
+			if (!user) {
+				throw new Error('User not found');
+			}
+		} catch (e) {
 			return new Response('Not Authorized', { status: 400 });
 		}
 
@@ -65,24 +63,8 @@ app.post(
 
 		// Generate a long random salt using a CSPRNG.
 
-		const salt = crypto.getRandomValues(new Uint8Array(32));
-		const saltString = new TextDecoder().decode(salt);
-
-		const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(password + saltString));
-
-		const hashString = new TextDecoder().decode(hash);
-
-		let userInfo: Omit<User, 'userId'> = {
-			username,
-			password: hashString,
-			salt: saltString
-		}
-
 		try {
-			await c.env.DB.prepare(
-				'INSERT INTO users (username, password, salt) VALUES (?, ?, ?)'
-			).bind(userInfo.username, userInfo.password, userInfo.salt).run();
-
+			createUser(username, password, c.env as Env);
 		} catch (e) {
 			return new Response('Failed to create new user', { status: 400 });
 		}
