@@ -1,22 +1,27 @@
 import { DecodeResult, EncodeResult, PartialSession, Session } from "./types";
-import { decodeJwt, jwtVerify, SignJWT } from "jose";
 import { Context } from "hono";
-import { Environment, Handler } from "hono/dist/types";
+import { Environment } from "hono/dist/types";
 import { Schema } from "hono/dist/validator/schema";
+import { decodeJwt, jwtVerify, SignJWT } from "jose";
+
+// extend JWTClaimVerificationOptions to include csrf token
+declare module "jose" {
+    interface JWTClaimVerificationOptions {
+        csrt: string;
+    }
+}
 
 export const encodeSession = async (secretKey: CryptoKey | Uint8Array, partialSession: PartialSession, issuer: string, audience: string): Promise<EncodeResult> => {
     const issued = Date.now();
     const fifteenMinutesInMs = 15 * 60 * 1000;
     const expires = issued + fifteenMinutesInMs;
-    const session: Session = {
-        ...partialSession,
-        issued: issued,
-        expires: expires
-    };
+
+    const csrt = crypto.randomUUID();
 
     const encodedToken = await new SignJWT({
-        sub: session.userId,
-        jti: session.sessionId,
+        sub: partialSession.userId,
+        jti: partialSession.sessionId,
+        csrt
     })
         .setProtectedHeader({ alg: "HS512" })
         .setIssuedAt(issued)
@@ -29,7 +34,8 @@ export const encodeSession = async (secretKey: CryptoKey | Uint8Array, partialSe
     return {
         token: encodedToken,
         issued: issued,
-        expires: expires
+        expires: expires,
+        csrt: csrt
     };
 }
 
@@ -37,39 +43,38 @@ export const decodeSession = async (secretKey: CryptoKey | Uint8Array, token: st
     let result: Session;
 
     try {
+        const partial = decodeJwt(token);
+
+        const csrt = partial.csrf as string;
+
         const decoded = await jwtVerify(token, secretKey, {
             issuer,
             audience,
+            csrt,
             algorithms: ["HS512"]
         });
 
-        const session = {
+        const session: Partial<Session> = {
             userId: decoded.payload.sub,
             sessionId: decoded.payload.jti,
             issued: decoded.payload.iat,
-            expires: decoded.payload.exp
+            expires: decoded.payload.exp,
+            csrt: decoded.payload.csrt as string
         }
 
         result = session as Session;
     } catch (e) {
         return {
             valid: false,
-            status: "expired"
+            expired: true
         };
     }
 
     const isExpired = result.expires < Date.now();
 
-    const threeHoursInMs = 3 * 60 * 60 * 1000;
-
-    const isGrace = result.expires + threeHoursInMs < Date.now();
-
-    const status = isGrace ? "grace" : isExpired ? "expired" : "active";
-
-
     return {
         valid: true,
-        status: isExpired ? "expired" : "active",
+        expired: isExpired,
         session: result
     };
 }
@@ -88,12 +93,37 @@ export const getAudience = (c: Context<string, Environment>) => {
     return c.req.headers.get('Host');
 }
 
-
-export const auth = async (c: Context<string, Environment, Schema>, action: ((s: Session) => Response) | ((s: Session) => Promise<Response>)): Promise<Response> => {
-
-    const jwt = c.req.headers.get('Cookie')?.split('=')[1];
+export const getSessionPartial = async (c: Context<string, Environment, Schema>): Promise<PartialSession | undefined> => {
+    const cookies = c.req.headers.get('Cookie')?.split(';');
+    const jwt = cookies?.find(c => c.trim().startsWith('jwt='))?.split('=')[1];
 
     if (!jwt) {
+        return undefined;
+    }
+
+    const session = decodeJwt(jwt);
+
+    if (!session || !session.sub || !session.jti) {
+        return undefined;
+    }
+
+    return {
+        userId: session.sub,
+        sessionId: session.jti
+    }
+}
+
+
+export const jwtMiddleware = async (c: Context<string, Environment, Schema>, next: () => Promise<void>): Promise<void | Response> => {
+
+
+    const cookies = c.req.headers.get('Cookie')?.split(';');
+
+    const jwt = cookies?.find(c => c.trim().startsWith('jwt='))?.split('=')[1];
+
+    const csrt = c.req.headers.get('X-CSRF-Token');
+
+    if (!jwt || !csrt) {
         // Not authorized
         return new Response('Not authorized', { status: 401 });
     }
@@ -104,7 +134,9 @@ export const auth = async (c: Context<string, Environment, Schema>, action: ((s:
     // get host of request
     const audience = getAudience(c);
 
+
     if (!audience) {
+
         return new Response('Not Authorized', { status: 400 });
     }
 
@@ -116,14 +148,21 @@ export const auth = async (c: Context<string, Environment, Schema>, action: ((s:
         audience
     )
 
-    if (!decoded.valid || !decoded.session) {
+    console.log('decoded', decoded);
+
+    if (!decoded.valid || !decoded.session || decoded.session.csrt !== csrt) {
         return new Response('Not authorized', { status: 401 });
     }
 
-    if (decoded.status === 'expired') {
+    console.log('here')
+
+    if (decoded.expired) {
         return new Response('Session expired', { status: 440 });
     }
 
-    return await action(decoded.session);
+    console.log('here')
+
+
+    return await next()
 }
 

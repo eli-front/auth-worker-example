@@ -14,21 +14,21 @@ export interface Session {
     userId: string
     issued: number
     expires: number
+    csrt: string
 }
 
-export type PartialSession = Omit<Session, 'issued' | 'expires'>
+export type PartialSession = Omit<Session, 'issued' | 'expires' | 'csrt'>
 
 export interface EncodeResult {
     token: string,
     expires: number,
     issued: number
+    csrt: string
 }
 
 export interface DecodeResult {
     valid: boolean
-    status: ExpirationStatus
+    expired: boolean
     session?: Session;
 }
 
-
-export type ExpirationStatus = "expired" | "active" | "grace";
